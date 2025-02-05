@@ -47,7 +47,7 @@ use crate::{
     function::JsonFunc, json::get_json, json::is_json_valid, json::json_array,
     json::json_array_length, json::json_arrow_extract, json::json_arrow_shift_extract,
     json::json_error_position, json::json_extract, json::json_object, json::json_patch,
-    json::json_remove, json::json_type,
+    json::json_remove, json::json_set, json::json_type,
 };
 use crate::{resolve_ext_path, Connection, Result, TransactionState, DATABASE_VERSION};
 use datetime::{
@@ -77,7 +77,7 @@ pub enum BranchOffset {
     /// A label is a named location in the program.
     /// If there are references to it, it must always be resolved to an Offset
     /// via program.resolve_label().
-    Label(i32),
+    Label(u32),
     /// An offset is a direct index into the instruction list.
     Offset(InsnReference),
     /// A placeholder is a temporary value to satisfy the compiler.
@@ -106,7 +106,7 @@ impl BranchOffset {
     }
 
     /// Returns the label value. Panics if the branch offset is an offset or placeholder.
-    pub fn to_label_value(&self) -> i32 {
+    pub fn to_label_value(&self) -> u32 {
         match self {
             BranchOffset::Label(v) => *v,
             BranchOffset::Offset(_) => unreachable!("Offset cannot be converted to label value"),
@@ -119,7 +119,7 @@ impl BranchOffset {
     /// label or placeholder.
     pub fn to_debug_int(&self) -> i32 {
         match self {
-            BranchOffset::Label(v) => *v,
+            BranchOffset::Label(v) => *v as i32,
             BranchOffset::Offset(v) => *v as i32,
             BranchOffset::Placeholder => i32::MAX,
         }
@@ -1858,6 +1858,18 @@ impl Program {
 
                                 let json_str = get_json(json_value, Some(indent))?;
                                 state.registers[*dest] = json_str;
+                            }
+                            JsonFunc::JsonSet => {
+                                let reg_values =
+                                    &state.registers[*start_reg + 1..*start_reg + arg_count];
+
+                                let json_result =
+                                    json_set(&state.registers[*start_reg], reg_values);
+
+                                match json_result {
+                                    Ok(json) => state.registers[*dest] = json,
+                                    Err(e) => return Err(e),
+                                }
                             }
                         },
                         crate::function::Func::Scalar(scalar_func) => match scalar_func {

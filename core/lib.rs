@@ -5,6 +5,7 @@ mod info;
 mod io;
 #[cfg(feature = "json")]
 mod json;
+pub mod mvcc;
 mod parameters;
 mod pseudo;
 mod result;
@@ -338,7 +339,7 @@ impl Connection {
                             *select,
                             &self.db.syms.borrow(),
                         )?;
-                        optimize_plan(&mut plan)?;
+                        optimize_plan(&mut plan, &self.schema.borrow())?;
                         println!("{}", plan);
                     }
                     _ => todo!(),
