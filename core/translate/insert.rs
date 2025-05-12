@@ -106,6 +106,8 @@ pub fn translate_insert(
         },
         InsertBody::DefaultValues => &vec![vec![]],
     };
+    // prepare parameters by tracking the number of variables we will be binding to values later on
+    program.parameters.init_insert_parameters(values);
 
     let column_mappings = resolve_columns_for_insert(&table, columns, values)?;
     let index_col_mappings = resolve_indicies_for_insert(schema, table.as_ref(), &column_mappings)?;
@@ -152,8 +154,9 @@ pub fn translate_insert(
 
         program.resolve_label(start_offset_label, program.offset());
 
-        for value in values {
+        for (i, value) in values.iter().enumerate() {
             populate_column_registers(
+                i,
                 &mut program,
                 value,
                 &column_mappings,
@@ -191,6 +194,7 @@ pub fn translate_insert(
         });
 
         populate_column_registers(
+            0,
             &mut program,
             &values[0],
             &column_mappings,
@@ -452,7 +456,6 @@ fn resolve_columns_for_insert<'a>(
     }
 
     let table_columns = &table.columns();
-
     // Case 1: No columns specified - map values to columns in order
     if columns.is_none() {
         let num_values = values[0].len();
@@ -503,15 +506,15 @@ fn resolve_columns_for_insert<'a>(
                 .map_or(false, |name| name.eq_ignore_ascii_case(&column_name))
         });
 
-        if table_index.is_none() {
+        let Some(table_index) = table_index else {
             crate::bail_parse_error!(
                 "table {} has no column named {}",
                 &table.get_name(),
                 column_name
             );
-        }
+        };
 
-        mappings[table_index.unwrap()].value_index = Some(value_index);
+        mappings[table_index].value_index = Some(value_index);
     }
 
     Ok(mappings)
@@ -581,7 +584,9 @@ fn resolve_indicies_for_insert(
 }
 
 /// Populates the column registers with values for a single row
+#[allow(clippy::too_many_arguments)]
 fn populate_column_registers(
+    row_idx: usize,
     program: &mut ProgramBuilder,
     value: &[Expr],
     column_mappings: &[ColumnMapping],
@@ -605,6 +610,14 @@ fn populate_column_registers(
             } else {
                 target_reg
             };
+            // We need the 'parameters' to be aware of the value_index of the current row
+            // so it can map it to the correct parameter index in the Variable opcode
+            // but we need to make sure the value_index is not overwritten if this is a multi-row
+            // insert. For 'insert into t values: (?,?), (?,?);'
+            // value_index should be (1,2),(3,4) instead of (1,2),(1,2), so multiply by col length
+            program
+                .parameters
+                .set_insert_value_index(value_index + (column_mappings.len() * row_idx));
             translate_expr_no_constant_opt(
                 program,
                 None,
@@ -668,21 +681,12 @@ fn translate_virtual_table_insert(
         InsertBody::DefaultValues => &vec![],
         _ => crate::bail_parse_error!("Unsupported INSERT body for virtual tables"),
     };
-
+    // initiate parameters by tracking the number of variables we will be binding to values
+    program.parameters.init_insert_parameters(values);
     let table = Table::Virtual(virtual_table.clone());
     let column_mappings = resolve_columns_for_insert(&table, columns, values)?;
+    let registers_start = program.alloc_registers(2);
 
-    let value_registers_start = program.alloc_registers(values[0].len());
-    for (i, expr) in values[0].iter().enumerate() {
-        translate_expr_no_constant_opt(
-            program,
-            None,
-            expr,
-            value_registers_start + i,
-            resolver,
-            NoConstantOptReason::RegisterReuse,
-        )?;
-    }
     /* *
      * Inserts for virtual tables are done in a single step.
      * argv[0] = (NULL for insert)
@@ -690,35 +694,22 @@ fn translate_virtual_table_insert(
      * argv[2..] = column values
      * */
 
-    let rowid_reg = program.alloc_registers(column_mappings.len() + 3);
-    let insert_rowid_reg = rowid_reg + 1; // argv[1] = insert_rowid
-    let data_start_reg = rowid_reg + 2; // argv[2..] = column values
-
     program.emit_insn(Insn::Null {
-        dest: rowid_reg,
-        dest_end: None,
-    });
-    program.emit_insn(Insn::Null {
-        dest: insert_rowid_reg,
-        dest_end: None,
+        dest: registers_start,
+        dest_end: Some(registers_start + 1),
     });
 
-    for (i, mapping) in column_mappings.iter().enumerate() {
-        let target_reg = data_start_reg + i;
-        if let Some(value_index) = mapping.value_index {
-            program.emit_insn(Insn::Copy {
-                src_reg: value_registers_start + value_index,
-                dst_reg: target_reg,
-                amount: 1,
-            });
-        } else {
-            program.emit_insn(Insn::Null {
-                dest: target_reg,
-                dest_end: None,
-            });
-        }
-    }
-
+    let values_reg = program.alloc_registers(column_mappings.len());
+    populate_column_registers(
+        0,
+        program,
+        &values[0],
+        &column_mappings,
+        values_reg,
+        false,
+        registers_start,
+        resolver,
+    )?;
     let conflict_action = on_conflict.as_ref().map(|c| c.bit_value()).unwrap_or(0) as u16;
 
     let cursor_id = program.alloc_cursor_id(
@@ -729,7 +720,7 @@ fn translate_virtual_table_insert(
     program.emit_insn(Insn::VUpdate {
         cursor_id,
         arg_count: column_mappings.len() + 2,
-        start_reg: rowid_reg,
+        start_reg: registers_start,
         vtab_ptr: virtual_table.implementation.as_ref().ctx as usize,
         conflict_action,
     });

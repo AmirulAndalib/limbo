@@ -32,3 +32,4 @@ source $testdir/drop_index.test
 source $testdir/default_value.test
 source $testdir/boolean.test
 source $testdir/literal.test
+source $testdir/null.test

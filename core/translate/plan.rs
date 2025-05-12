@@ -343,6 +343,48 @@ impl SelectPlan {
     pub fn group_by_sorter_column_count(&self) -> usize {
         self.agg_args_count() + self.group_by_col_count() + self.non_group_by_non_agg_column_count()
     }
+
+    /// Reference: https://github.com/sqlite/sqlite/blob/5db695197b74580c777b37ab1b787531f15f7f9f/src/select.c#L8613
+    ///
+    /// Checks to see if the query is of the format `SELECT count(*) FROM <tbl>`
+    pub fn is_simple_count(&self) -> bool {
+        if !self.where_clause.is_empty()
+            || self.aggregates.len() != 1
+            || matches!(self.query_type, SelectQueryType::Subquery { .. })
+            || self.table_references.len() != 1
+            || self.result_columns.len() != 1
+            || self.group_by.is_some()
+            || self.contains_constant_false_condition
+        // TODO: (pedrocarlo) maybe can optimize to use the count optmization with more columns
+        {
+            return false;
+        }
+        let table_ref = self.table_references.first().unwrap();
+        if !matches!(table_ref.table, crate::schema::Table::BTree(..)) {
+            return false;
+        }
+        let agg = self.aggregates.first().unwrap();
+        if !matches!(agg.func, AggFunc::Count0) {
+            return false;
+        }
+
+        let count = limbo_sqlite3_parser::ast::Expr::FunctionCall {
+            name: limbo_sqlite3_parser::ast::Id("count".to_string()),
+            distinctness: None,
+            args: None,
+            order_by: None,
+            filter_over: None,
+        };
+        let count_star = limbo_sqlite3_parser::ast::Expr::FunctionCallStar {
+            name: limbo_sqlite3_parser::ast::Id("count".to_string()),
+            filter_over: None,
+        };
+        let result_col_expr = &self.result_columns.get(0).unwrap().expr;
+        if *result_col_expr != count && *result_col_expr != count_star {
+            return false;
+        }
+        true
+    }
 }
 
 #[allow(dead_code)]

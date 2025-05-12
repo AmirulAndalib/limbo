@@ -475,19 +475,24 @@ pub fn translate_create_virtual_table(
     if !vtab_module.module_kind.eq(&VTabKind::VirtualTable) {
         bail_parse_error!("module {} is not a virtual table", module_name_str);
     };
-    if schema.get_table(&table_name).is_some() && *if_not_exists {
-        let mut program = ProgramBuilder::new(ProgramBuilderOpts {
-            query_mode,
-            num_cursors: 1,
-            approx_num_insns: 5,
-            approx_num_labels: 1,
-        });
-        let init_label = program.emit_init();
-        program.emit_halt();
-        program.preassign_label_to_next_insn(init_label);
-        program.emit_transaction(true);
-        program.emit_constant_insns();
-        return Ok(program);
+    if schema.get_table(&table_name).is_some() {
+        if *if_not_exists {
+            let mut program = ProgramBuilder::new(ProgramBuilderOpts {
+                query_mode,
+                num_cursors: 1,
+                approx_num_insns: 5,
+                approx_num_labels: 1,
+            });
+            let init_label = program.emit_init();
+            let start_offset = program.offset();
+            program.emit_halt();
+            program.preassign_label_to_next_insn(init_label);
+            program.emit_transaction(true);
+            program.emit_constant_insns();
+            program.emit_goto(start_offset);
+            return Ok(program);
+        }
+        bail_parse_error!("Table {} already exists", tbl_name);
     }
 
     let mut program = ProgramBuilder::new(ProgramBuilderOpts {

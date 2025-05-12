@@ -64,11 +64,11 @@ func ensureLibLoaded() error {
 		purego.RegisterLibFunc(&rowsGetValue, limboLib, FfiRowsGetValue)
 		purego.RegisterLibFunc(&closeRows, limboLib, FfiRowsClose)
 		purego.RegisterLibFunc(&rowsNext, limboLib, FfiRowsNext)
-		purego.RegisterLibFunc(&rowsGetError, limboLib, FfiDbGetError)
+		purego.RegisterLibFunc(&rowsGetError, limboLib, FfiRowsGetError)
 		purego.RegisterLibFunc(&stmtQuery, limboLib, FfiStmtQuery)
 		purego.RegisterLibFunc(&stmtExec, limboLib, FfiStmtExec)
 		purego.RegisterLibFunc(&stmtParamCount, limboLib, FfiStmtParameterCount)
-		purego.RegisterLibFunc(&stmtGetError, limboLib, FfiDbGetError)
+		purego.RegisterLibFunc(&stmtGetError, limboLib, FfiStmtGetError)
 		purego.RegisterLibFunc(&stmtClose, limboLib, FfiStmtClose)
 	})
 	return loadErr

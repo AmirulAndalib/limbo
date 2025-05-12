@@ -581,6 +581,46 @@ def test_sqlite_vfs_compat():
     sqlite.quit()
 
 
+def test_create_virtual_table():
+    ext_path = "target/debug/liblimbo_ext_tests"
+
+    limbo = TestLimboShell()
+    limbo.execute_dot(f".load {ext_path}")
+
+    limbo.debug_print("CREATE VIRTUAL TABLE t1 USING kv_store;")
+    limbo.run_test_fn(
+        "CREATE VIRTUAL TABLE t1 USING kv_store;",
+        lambda res: "× Parse error: Table t1 already exists" == res,
+        "create virtual table fails if virtual table with the same name already exists",
+    )
+    limbo.run_test_fn(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS t1 USING kv_store;",
+        null,
+        "create virtual table with IF NOT EXISTS succeeds",
+    )
+
+    limbo.debug_print("CREATE TABLE t2 (col INTEGER);")
+    limbo.run_test_fn(
+        "CREATE VIRTUAL TABLE t2 USING kv_store;",
+        lambda res: "× Parse error: Table t2 already exists" == res,
+        "create virtual table fails if regular table with the same name already exists",
+    )
+    limbo.run_test_fn(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS t2 USING kv_store;",
+        null,
+        "create virtual table with IF NOT EXISTS succeeds",
+    )
+
+    limbo.debug_print("CREATE VIRTUAL TABLE t3 USING kv_store;")
+    limbo.run_test_fn(
+        "CREATE TABLE t3 (col INTEGER);",
+        lambda res: "× Parse error: Table t3 already exists" == res,
+        "create table fails if virtual table with the same name already exists",
+    )
+
+    limbo.quit()
+
+
 def cleanup():
     if os.path.exists("testing/vfs.db"):
         os.remove("testing/vfs.db")
@@ -600,6 +640,7 @@ def main():
         test_sqlite_vfs_compat()
         test_kv()
         test_drop_virtual_table()
+        test_create_virtual_table()
     except Exception as e:
         console.error(f"Test FAILED: {e}")
         cleanup()
