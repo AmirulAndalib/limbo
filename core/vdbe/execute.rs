@@ -1369,7 +1369,7 @@ pub fn op_column(
     else {
         unreachable!("unexpected Insn {:?}", insn)
     };
-    if let Some((index_cursor_id, table_cursor_id)) = state.deferred_seek.take() {
+    if let Some((index_cursor_id, table_cursor_id)) = state.deferred_seeks[*cursor_id].take() {
         let deferred_seek = {
             let rowid = {
                 let mut index_cursor = state.get_cursor(index_cursor_id);
@@ -1384,7 +1384,7 @@ pub fn op_column(
             }
         };
         if let Some(deferred_seek) = deferred_seek {
-            state.deferred_seek = Some(deferred_seek);
+            state.deferred_seeks[*cursor_id] = Some(deferred_seek);
             return Ok(InsnFunctionStepResult::IO);
         }
     }
@@ -1925,7 +1925,7 @@ pub fn op_row_id(
     let Insn::RowId { cursor_id, dest } = insn else {
         unreachable!("unexpected Insn {:?}", insn)
     };
-    if let Some((index_cursor_id, table_cursor_id)) = state.deferred_seek.take() {
+    if let Some((index_cursor_id, table_cursor_id)) = state.deferred_seeks[*cursor_id].take() {
         let deferred_seek = {
             let rowid = {
                 let mut index_cursor = state.get_cursor(index_cursor_id);
@@ -1946,7 +1946,7 @@ pub fn op_row_id(
             }
         };
         if let Some(deferred_seek) = deferred_seek {
-            state.deferred_seek = Some(deferred_seek);
+            state.deferred_seeks[*cursor_id] = Some(deferred_seek);
             return Ok(InsnFunctionStepResult::IO);
         }
     }
@@ -2058,7 +2058,7 @@ pub fn op_deferred_seek(
     else {
         unreachable!("unexpected Insn {:?}", insn)
     };
-    state.deferred_seek = Some((*index_cursor_id, *table_cursor_id));
+    state.deferred_seeks[*table_cursor_id] = Some((*index_cursor_id, *table_cursor_id));
     state.pc += 1;
     Ok(InsnFunctionStepResult::Step)
 }
@@ -2482,7 +2482,10 @@ pub fn op_agg_step(
         AggFunc::Avg => {
             let col = state.registers[*col].clone();
             let Register::Aggregate(agg) = state.registers[*acc_reg].borrow_mut() else {
-                unreachable!();
+                panic!(
+                    "Unexpected value {:?} in AggStep at register {}",
+                    state.registers[*acc_reg], *acc_reg
+                );
             };
             let AggContext::Avg(acc, count) = agg.borrow_mut() else {
                 unreachable!();
@@ -2493,7 +2496,10 @@ pub fn op_agg_step(
         AggFunc::Sum | AggFunc::Total => {
             let col = state.registers[*col].clone();
             let Register::Aggregate(agg) = state.registers[*acc_reg].borrow_mut() else {
-                unreachable!();
+                panic!(
+                    "Unexpected value {:?} at register {:?} in AggStep",
+                    state.registers[*acc_reg], *acc_reg
+                );
             };
             let AggContext::Sum(acc) = agg.borrow_mut() else {
                 unreachable!();
@@ -2512,7 +2518,10 @@ pub fn op_agg_step(
                     Register::Aggregate(AggContext::Count(Value::Integer(0)));
             }
             let Register::Aggregate(agg) = state.registers[*acc_reg].borrow_mut() else {
-                unreachable!();
+                panic!(
+                    "Unexpected value {:?} in AggStep at register {}",
+                    state.registers[*acc_reg], *acc_reg
+                );
             };
             let AggContext::Count(count) = agg.borrow_mut() else {
                 unreachable!();
@@ -2525,7 +2534,10 @@ pub fn op_agg_step(
         AggFunc::Max => {
             let col = state.registers[*col].clone();
             let Register::Aggregate(agg) = state.registers[*acc_reg].borrow_mut() else {
-                unreachable!();
+                panic!(
+                    "Unexpected value {:?} in AggStep at register {}",
+                    state.registers[*acc_reg], *acc_reg
+                );
             };
             let AggContext::Max(acc) = agg.borrow_mut() else {
                 unreachable!();
@@ -2558,7 +2570,10 @@ pub fn op_agg_step(
         AggFunc::Min => {
             let col = state.registers[*col].clone();
             let Register::Aggregate(agg) = state.registers[*acc_reg].borrow_mut() else {
-                unreachable!();
+                panic!(
+                    "Unexpected value {:?} in AggStep",
+                    state.registers[*acc_reg]
+                );
             };
             let AggContext::Min(acc) = agg.borrow_mut() else {
                 unreachable!();
@@ -2806,8 +2821,8 @@ pub fn op_agg_final(
                 _ => {}
             }
         }
-        _ => {
-            unreachable!();
+        other => {
+            panic!("Unexpected value {:?} in AggFinal", other);
         }
     };
     state.pc += 1;
