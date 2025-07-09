@@ -14,10 +14,16 @@ use turso_core::{LimboError, StepResult};
 #[derive(Default)]
 #[napi(object)]
 pub struct OpenDatabaseOptions {
-    pub readonly: bool,
-    pub file_must_exist: bool,
-    pub timeout: u32,
+    pub readonly: Option<bool>,
+    pub file_must_exist: Option<bool>,
+    pub timeout: Option<u32>,
     // verbose => Callback,
+}
+
+impl OpenDatabaseOptions {
+    fn readonly(&self) -> bool {
+        self.readonly.unwrap_or(false)
+    }
 }
 
 #[napi(object)]
@@ -55,28 +61,30 @@ impl ObjectFinalize for Database {
 #[napi]
 impl Database {
     #[napi(constructor)]
-    pub fn new(path: String, options: Option<OpenDatabaseOptions>) -> napi::Result<Self> {
+    pub fn new(path: String, options: Option<OpenDatabaseOptions>) -> napi::Result<Self, String> {
         let memory = path == ":memory:";
         let io: Arc<dyn turso_core::IO> = if memory {
             Arc::new(turso_core::MemoryIO::new())
         } else {
-            Arc::new(turso_core::PlatformIO::new().map_err(into_napi_error)?)
+            Arc::new(turso_core::PlatformIO::new().map_err(into_napi_sqlite_error)?)
         };
         let opts = options.unwrap_or_default();
-        let flag = if opts.readonly {
+        let flag = if opts.readonly() {
             turso_core::OpenFlags::ReadOnly
         } else {
             turso_core::OpenFlags::Create
         };
-        let file = io.open_file(&path, flag, false).map_err(into_napi_error)?;
+        let file = io
+            .open_file(&path, flag, false)
+            .map_err(|err| into_napi_error_with_message("SQLITE_CANTOPEN".to_owned(), err))?;
 
         let db_file = Arc::new(DatabaseFile::new(file));
         let db = turso_core::Database::open(io.clone(), &path, db_file, false, false)
-            .map_err(into_napi_error)?;
-        let conn = db.connect().map_err(into_napi_error)?;
+            .map_err(into_napi_sqlite_error)?;
+        let conn = db.connect().map_err(into_napi_sqlite_error)?;
 
         Ok(Self {
-            readonly: opts.readonly,
+            readonly: opts.readonly(),
             memory,
             _db: db,
             conn,
@@ -132,16 +140,6 @@ impl Database {
     }
 
     #[napi]
-    pub fn readonly(&self) -> bool {
-        self.readonly
-    }
-
-    #[napi]
-    pub fn open(&self) -> bool {
-        self.open
-    }
-
-    #[napi]
     pub fn backup(&self) {
         todo!()
     }
@@ -176,7 +174,7 @@ impl Database {
     }
 
     #[napi]
-    pub fn exec(&self, sql: String) -> napi::Result<()> {
+    pub fn exec(&self, sql: String) -> napi::Result<(), String> {
         let query_runner = self.conn.query_runner(sql.as_bytes());
 
         // Since exec doesn't return any values, we can just iterate over the results
@@ -185,17 +183,17 @@ impl Database {
                 Ok(Some(mut stmt)) => loop {
                     match stmt.step() {
                         Ok(StepResult::Row) => continue,
-                        Ok(StepResult::IO) => stmt.run_once().map_err(into_napi_error)?,
+                        Ok(StepResult::IO) => stmt.run_once().map_err(into_napi_sqlite_error)?,
                         Ok(StepResult::Done) => break,
                         Ok(StepResult::Interrupt | StepResult::Busy) => {
                             return Err(napi::Error::new(
-                                napi::Status::GenericFailure,
+                                "SQLITE_ERROR".to_owned(),
                                 "Statement execution interrupted or busy".to_string(),
                             ));
                         }
                         Err(err) => {
                             return Err(napi::Error::new(
-                                napi::Status::GenericFailure,
+                                "SQLITE_ERROR".to_owned(),
                                 format!("Error executing SQL: {}", err),
                             ));
                         }
@@ -204,7 +202,7 @@ impl Database {
                 Ok(None) => continue,
                 Err(err) => {
                     return Err(napi::Error::new(
-                        napi::Status::GenericFailure,
+                        "SQLITE_ERROR".to_owned(),
                         format!("Error executing SQL: {}", err),
                     ));
                 }
@@ -263,7 +261,7 @@ impl Statement {
 
     #[napi]
     pub fn get(&self, env: Env, args: Option<Vec<JsUnknown>>) -> napi::Result<JsUnknown> {
-        let mut stmt = self.check_and_bind(args)?;
+        let mut stmt = self.check_and_bind(env, args)?;
 
         loop {
             let step = stmt.step().map_err(into_napi_error)?;
@@ -324,7 +322,7 @@ impl Statement {
     // TODO: Return Info object (https://github.com/WiseLibs/better-sqlite3/blob/master/docs/api.md#runbindparameters---object)
     #[napi]
     pub fn run(&self, env: Env, args: Option<Vec<JsUnknown>>) -> napi::Result<JsUnknown> {
-        let stmt = self.check_and_bind(args)?;
+        let stmt = self.check_and_bind(env, args)?;
 
         self.internal_all(env, stmt)
     }
@@ -335,7 +333,12 @@ impl Statement {
         env: Env,
         args: Option<Vec<JsUnknown>>,
     ) -> napi::Result<IteratorStatement> {
-        self.check_and_bind(args)?;
+        if let Some(some_args) = args.as_ref() {
+            if some_args.iter().len() != 0 {
+                self.check_and_bind(env, args)?;
+            }
+        }
+
         Ok(IteratorStatement {
             stmt: Rc::clone(&self.inner),
             _database: self.database.clone(),
@@ -346,7 +349,7 @@ impl Statement {
 
     #[napi]
     pub fn all(&self, env: Env, args: Option<Vec<JsUnknown>>) -> napi::Result<JsUnknown> {
-        let stmt = self.check_and_bind(args)?;
+        let stmt = self.check_and_bind(env, args)?;
 
         self.internal_all(env, stmt)
     }
@@ -444,8 +447,9 @@ impl Statement {
     }
 
     #[napi]
-    pub fn bind(&mut self, args: Option<Vec<JsUnknown>>) -> napi::Result<Self> {
-        self.check_and_bind(args)?;
+    pub fn bind(&mut self, env: Env, args: Option<Vec<JsUnknown>>) -> napi::Result<Self, String> {
+        self.check_and_bind(env, args)
+            .map_err(with_sqlite_error_message)?;
         self.binded = true;
 
         Ok(self.clone())
@@ -455,16 +459,22 @@ impl Statement {
     /// and bind values do variables. The expected type for args is `Option<Vec<JsUnknown>>`
     fn check_and_bind(
         &self,
+        env: Env,
         args: Option<Vec<JsUnknown>>,
     ) -> napi::Result<RefMut<'_, turso_core::Statement>> {
         let mut stmt = self.inner.borrow_mut();
         stmt.reset();
         if let Some(args) = args {
             if self.binded {
-                return Err(napi::Error::new(
-                    napi::Status::InvalidArg,
-                    "This statement already has bound parameters",
-                ));
+                let err = napi::Error::new(
+                    into_convertible_type_error_message("TypeError"),
+                    "The bind() method can only be invoked once per statement object",
+                );
+                unsafe {
+                    napi::JsTypeError::from(err).throw_into(env.raw());
+                }
+
+                return Err(napi::Error::from_status(napi::Status::PendingException));
             }
 
             for (i, elem) in args.into_iter().enumerate() {
@@ -630,6 +640,29 @@ impl turso_core::DatabaseStorage for DatabaseFile {
 }
 
 #[inline]
-pub fn into_napi_error(limbo_error: LimboError) -> napi::Error {
+fn into_napi_error(limbo_error: LimboError) -> napi::Error {
     napi::Error::new(napi::Status::GenericFailure, format!("{limbo_error}"))
+}
+
+#[inline]
+fn into_napi_sqlite_error(limbo_error: LimboError) -> napi::Error<String> {
+    napi::Error::new(String::from("SQLITE_ERROR"), format!("{limbo_error}"))
+}
+
+#[inline]
+fn into_napi_error_with_message(
+    error_code: String,
+    limbo_error: LimboError,
+) -> napi::Error<String> {
+    napi::Error::new(error_code, format!("{limbo_error}"))
+}
+
+#[inline]
+fn with_sqlite_error_message(err: napi::Error) -> napi::Error<String> {
+    napi::Error::new("SQLITE_ERROR".to_owned(), err.reason)
+}
+
+#[inline]
+fn into_convertible_type_error_message(error_type: &str) -> String {
+    "[TURSO_CONVERT_TYPE]".to_owned() + error_type
 }

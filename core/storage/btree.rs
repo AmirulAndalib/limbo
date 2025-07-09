@@ -500,7 +500,7 @@ pub struct BTreeCursor {
     /// Colations for Index Btree constraint checks
     /// Contains the Collation Seq for the whole Index
     /// This Vec should be empty for Table Btree
-    collations: Vec<CollationSeq>,
+    pub collations: Vec<CollationSeq>,
     seek_state: CursorSeekState,
     /// Separate state to read a record with overflow pages. This separation from `state` is necessary as
     /// we can be in a function that relies on `state`, but also needs to process overflow pages
@@ -1362,8 +1362,8 @@ impl BTreeCursor {
                 let max = max_cell_idx.get();
                 if min > max {
                     if let Some(nearest_matching_cell) = nearest_matching_cell.get() {
-                        let left_child_page = contents
-                            .cell_table_interior_read_left_child_page(nearest_matching_cell)?;
+                        let left_child_page =
+                            contents.cell_interior_read_left_child_page(nearest_matching_cell);
                         self.stack.set_cell_index(nearest_matching_cell as i32);
                         let mem_page = self.read_page(left_child_page as usize)?;
                         self.stack.push(mem_page);
@@ -4627,44 +4627,6 @@ impl BTreeCursor {
     #[inline(always)]
     pub fn get_null_flag(&self) -> bool {
         self.null_flag
-    }
-
-    /// Search for a key in an Index Btree. Looking up indexes that need to be unique, we cannot compare the rowid
-    #[instrument(skip_all, level = Level::INFO)]
-    pub fn key_exists_in_index(&mut self, key: &ImmutableRecord) -> Result<CursorResult<bool>> {
-        return_if_io!(self.seek(SeekKey::IndexKey(key), SeekOp::GE { eq_only: true }));
-
-        let record_opt = return_if_io!(self.record());
-        match record_opt.as_ref() {
-            Some(record) => {
-                // Existing record found; if the index has a rowid, exclude it from the comparison since it's a pointer to the table row;
-                // UNIQUE indexes disallow duplicates like (a=1,b=2,rowid=1) and (a=1,b=2,rowid=2).
-                let existing_key = if self.has_rowid() {
-                    &record.get_values()[..record.count().saturating_sub(1)]
-                } else {
-                    record.get_values()
-                };
-                let inserted_key_vals = &key.get_values();
-                // Need this check because .all returns True on an empty iterator,
-                // So when record_opt is invalidated, it would always indicate show up as a duplicate key
-                if existing_key.len() != inserted_key_vals.len() {
-                    return Ok(CursorResult::Ok(false));
-                }
-
-                Ok(CursorResult::Ok(
-                    compare_immutable(
-                        existing_key,
-                        inserted_key_vals,
-                        self.key_sort_order(),
-                        &self.collations,
-                    ) == std::cmp::Ordering::Equal,
-                ))
-            }
-            None => {
-                // Cursor not pointing at a record — table is empty or past last
-                Ok(CursorResult::Ok(false))
-            }
-        }
     }
 
     #[instrument(skip_all, level = Level::INFO)]

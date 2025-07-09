@@ -377,7 +377,7 @@ dualTest.both("Database.pragma()", async (t) => {
   t.deepEqual(db.pragma("cache_size"), [{ "cache_size": 2000 }]);
 });
 
-dualTest.onlySqlitePasses("errors", async (t) => {
+dualTest.both("errors", async (t) => {
   const db = t.context.db;
 
   const syntaxError = await t.throws(() => {
@@ -385,7 +385,7 @@ dualTest.onlySqlitePasses("errors", async (t) => {
   }, {
     any: true,
     instanceOf: t.context.errorType,
-    message: 'near "SYNTAX": syntax error',
+    message: /near "SYNTAX": syntax error/,
     code: 'SQLITE_ERROR'
   });
   const noTableError = await t.throws(() => {
@@ -393,7 +393,7 @@ dualTest.onlySqlitePasses("errors", async (t) => {
   }, {
     any: true,
     instanceOf: t.context.errorType,
-    message: "no such table: missing_table",
+    message: /(Parse error: Table missing_table not found|no such table: missing_table)/,
     code: 'SQLITE_ERROR'
   });
 

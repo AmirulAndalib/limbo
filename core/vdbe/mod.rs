@@ -29,6 +29,8 @@ use crate::{
     function::{AggFunc, FuncCtx},
     storage::{pager::PagerCacheflushStatus, sqlite3_ondisk::SmallVec},
     translate::plan::TableReferences,
+    vdbe::execute::OpIdxInsertState,
+    vdbe::execute::OpInsertState,
 };
 
 use crate::{
@@ -250,6 +252,8 @@ pub struct ProgramState {
     op_idx_delete_state: Option<OpIdxDeleteState>,
     op_integrity_check_state: OpIntegrityCheckState,
     op_open_ephemeral_state: OpOpenEphemeralState,
+    op_idx_insert_state: OpIdxInsertState,
+    op_insert_state: OpInsertState,
 }
 
 impl ProgramState {
@@ -276,6 +280,8 @@ impl ProgramState {
             op_idx_delete_state: None,
             op_integrity_check_state: OpIntegrityCheckState::Start,
             op_open_ephemeral_state: OpOpenEphemeralState::Start,
+            op_idx_insert_state: OpIdxInsertState::SeekIfUnique,
+            op_insert_state: OpInsertState::Insert,
         }
     }
 

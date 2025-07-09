@@ -51,8 +51,7 @@ pub fn resolve_aggregates(
                 } else {
                     0
                 };
-                match Func::resolve_function(normalize_ident(name.0.as_str()).as_str(), args_count)
-                {
+                match Func::resolve_function(&name.0, args_count) {
                     Ok(Func::Agg(f)) => {
                         let distinctness = Distinctness::from_ast(distinctness.as_ref());
                         if !schema.indexes_enabled() && distinctness.is_distinct() {
@@ -84,9 +83,7 @@ pub fn resolve_aggregates(
                 }
             }
             Expr::FunctionCallStar { name, .. } => {
-                if let Ok(Func::Agg(f)) =
-                    Func::resolve_function(normalize_ident(name.0.as_str()).as_str(), 0)
-                {
+                if let Ok(Func::Agg(f)) = Func::resolve_function(&name.0, 0) {
                     aggs.push(Aggregate {
                         func: f,
                         args: vec![],

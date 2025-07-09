@@ -93,6 +93,15 @@ impl Cursor {
             Ok::<(), anyhow::Error>(())
         })?;
 
+        if stmt_is_dml && self.conn.conn.get_auto_commit() {
+            self.conn.conn.execute("BEGIN").map_err(|e| {
+                PyErr::new::<OperationalError, _>(format!(
+                    "Failed to start transaction after DDL: {:?}",
+                    e
+                ))
+            })?;
+        }
+
         // For DDL and DML statements,
         // we need to execute the statement immediately
         if stmt_is_ddl || stmt_is_dml || stmt_is_tx {

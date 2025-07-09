@@ -9,7 +9,7 @@ use crate::function::JsonFunc;
 use crate::function::{Func, FuncCtx, MathFuncArity, ScalarFunc, VectorFunc};
 use crate::functions::datetime;
 use crate::schema::{Affinity, Table, Type};
-use crate::util::{exprs_are_equivalent, normalize_ident, parse_numeric_literal};
+use crate::util::{exprs_are_equivalent, parse_numeric_literal};
 use crate::vdbe::builder::CursorKey;
 use crate::vdbe::{
     builder::ProgramBuilder,
@@ -680,8 +680,7 @@ pub fn translate_expr(
             order_by: _,
         } => {
             let args_count = if let Some(args) = args { args.len() } else { 0 };
-            let func_name = normalize_ident(name.0.as_str());
-            let func_type = resolver.resolve_function(&func_name, args_count);
+            let func_type = resolver.resolve_function(&name.0, args_count);
 
             if func_type.is_none() {
                 crate::bail_parse_error!("unknown function {}", name.0);

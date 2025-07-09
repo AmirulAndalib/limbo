@@ -32,7 +32,7 @@ const genDatabaseFilename = () => {
   return `test-${crypto.randomBytes(8).toString('hex')}.db`;
 };
 
-new DualTest().onlySqlitePasses("opening a read-only database fails if the file doesn't exist", async (t) => {
+new DualTest().both("opening a read-only database fails if the file doesn't exist", async (t) => {
   t.throws(() => t.context.connect(genDatabaseFilename(), { readonly: true }),
     {
       any: true,
@@ -104,7 +104,21 @@ inMemoryTest.both("Empty prepared statement should throw", async (t) => {
     () => {
       db.prepare("");
     },
-    { instanceOf: Error },
+    { any: true }
+  );
+});
+
+inMemoryTest.onlySqlitePasses("Empty prepared statement should throw the correct error", async (t) => {
+  // the previous test can be removed once this one passes in Turso
+  const db = t.context.db;
+  t.throws(
+    () => {
+      db.prepare("");
+    },
+    {
+      instanceOf: RangeError,
+      message: "The supplied SQL string contains no statements",
+    },
   );
 });
 
@@ -156,9 +170,12 @@ inMemoryTest.both("Statement shouldn't bind twice with bind()", async (t) => {
 
   t.throws(
     () => {
-      db.bind("Bob");
+      stmt.bind("Bob");
     },
-    { instanceOf: Error },
+    {
+      instanceOf: TypeError,
+      message: 'The bind() method can only be invoked once per statement object',
+    },
   );
 });
 
@@ -371,4 +388,5 @@ inMemoryTest.both("Test Statement.source", async t => {
   let stmt = db.prepare(sql);
   t.is(stmt.source, sql);
 });
+
 
