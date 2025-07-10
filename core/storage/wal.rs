@@ -977,6 +977,7 @@ impl WalFile {
         }
 
         let header = unsafe { shared.get().as_mut().unwrap().wal_header.lock() };
+        let last_checksum = unsafe { (*shared.get()).last_checksum };
         Self {
             io,
             // default to max frame in WAL, so that when we read schema we can read from WAL too if it's there.
@@ -995,7 +996,7 @@ impl WalFile {
             sync_state: Cell::new(SyncState::NotSyncing),
             min_frame: 0,
             max_frame_read_lock_index: 0,
-            last_checksum: (0, 0),
+            last_checksum,
             start_pages_in_frames: 0,
             header: *header,
         }
@@ -1083,6 +1084,7 @@ impl WalFileShared {
             let checksum = header.lock();
             (checksum.checksum_1, checksum.checksum_2)
         };
+        tracing::debug!("new_shared(header={:?})", header);
         let shared = WalFileShared {
             wal_header: header,
             min_frame: AtomicU64::new(0),

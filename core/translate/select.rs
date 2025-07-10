@@ -206,6 +206,14 @@ fn prepare_one_select_plan(
 
             let mut table_references = TableReferences::new(vec![], outer_query_refs.to_vec());
 
+            if from.is_none() {
+                for column in &columns {
+                    if matches!(column, ResultColumn::Star) {
+                        crate::bail_parse_error!("no tables specified");
+                    }
+                }
+            }
+
             // Parse the FROM clause into a vec of TableReferences. Fold all the join conditions expressions into the WHERE clause.
             parse_from(
                 schema,

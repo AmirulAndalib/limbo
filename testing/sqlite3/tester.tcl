@@ -250,9 +250,8 @@ proc sqlite3 {handle db_file} {
                 set fields [split $line "|"]
                 foreach field $fields {
                   set field [string trim $field]
-                  if {$field ne ""} {
-                    lappend result $field
-                  }
+                  # Always append the field, even if empty (represents NULL)
+                  lappend result $field
                 }
               }
             }
@@ -408,9 +407,8 @@ proc execsql {sql {db db}} {
       set fields [split $line "|"]
       foreach field $fields {
         set field [string trim $field]
-        if {$field ne ""} {
-          lappend result $field
-        }
+        # Always append the field, even if empty (represents NULL)
+        lappend result $field
       }
     }
   }

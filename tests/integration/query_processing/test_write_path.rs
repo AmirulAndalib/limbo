@@ -734,6 +734,33 @@ fn test_wal_bad_frame() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_read_wal_dumb_no_frames() -> anyhow::Result<()> {
+    maybe_setup_tracing();
+    let _ = env_logger::try_init();
+    let db_path = {
+        let tmp_db = TempDatabase::new_empty(false);
+        let conn = tmp_db.connect_limbo();
+        conn.close()?;
+        tmp_db.path.clone()
+    };
+    // Second connection must recover from the WAL file. Last checksum should be filled correctly.
+    {
+        let tmp_db = TempDatabase::new_with_existent(&db_path, false);
+        let conn = tmp_db.connect_limbo();
+        conn.execute("CREATE TABLE t0(x)")?;
+        conn.close()?;
+    }
+    {
+        let tmp_db = TempDatabase::new_with_existent(&db_path, false);
+        let conn = tmp_db.connect_limbo();
+        conn.execute("INSERT INTO t0(x) VALUES (1)")?;
+        conn.close()?;
+    }
+
+    Ok(())
+}
+
 fn run_query(tmp_db: &TempDatabase, conn: &Arc<Connection>, query: &str) -> anyhow::Result<()> {
     run_query_core(tmp_db, conn, query, None::<fn(&Row)>)
 }

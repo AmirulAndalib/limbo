@@ -285,6 +285,18 @@ do_execsql_test_on_specific_db {:memory:} select-union-all-with-filters {
 6
 10}
 
+do_execsql_test_error select-star-no-from {
+  SELECT *;
+} {no tables specified}
+
+do_execsql_test_error select-star-and-constant-no-from {
+  SELECT *, 1;
+} {no tables specified}
+
+do_execsql_test_error select-star-subquery {
+  SELECT 1 FROM (SELECT *);
+} {no tables specified}
+
 if {[info exists ::env(SQLITE_EXEC)] && ($::env(SQLITE_EXEC) eq "scripts/limbo-sqlite3-index-experimental" || $::env(SQLITE_EXEC) eq "sqlite3")} {
     do_execsql_test_on_specific_db {:memory:} select-union-1 {
     CREATE TABLE t(x TEXT, y TEXT);

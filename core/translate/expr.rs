@@ -693,7 +693,7 @@ pub fn translate_expr(
 
             match &func_ctx.func {
                 Func::Agg(_) => {
-                    crate::bail_parse_error!("aggregation function in non-aggregation context")
+                    crate::bail_parse_error!("misuse of aggregate function {}()", name.0)
                 }
                 Func::External(_) => {
                     let regs = program.alloc_registers(args_count);

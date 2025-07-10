@@ -56,6 +56,7 @@ use crate::storage::btree::offset::{
     BTREE_CELL_CONTENT_AREA, BTREE_CELL_COUNT, BTREE_FIRST_FREEBLOCK, BTREE_FRAGMENTED_BYTES_COUNT,
     BTREE_PAGE_TYPE, BTREE_RIGHTMOST_PTR,
 };
+use crate::storage::btree::{payload_overflow_threshold_max, payload_overflow_threshold_min};
 use crate::storage::buffer_pool::BufferPool;
 use crate::storage::database::DatabaseStorage;
 use crate::storage::pager::Pager;
@@ -536,13 +537,7 @@ impl PageContent {
         }
     }
 
-    pub fn cell_get(
-        &self,
-        idx: usize,
-        payload_overflow_threshold_max: usize,
-        payload_overflow_threshold_min: usize,
-        usable_size: usize,
-    ) -> Result<BTreeCell> {
+    pub fn cell_get(&self, idx: usize, usable_size: usize) -> Result<BTreeCell> {
         tracing::trace!("cell_get(idx={})", idx);
         let buf = self.as_ptr();
 
@@ -560,14 +555,7 @@ impl PageContent {
         // SAFETY: this buffer is valid as long as the page is alive. We could store the page in the cell and do some lifetime magic
         // but that is extra memory for no reason at all. Just be careful like in the old times :).
         let static_buf: &'static [u8] = unsafe { std::mem::transmute::<&[u8], &'static [u8]>(buf) };
-        read_btree_cell(
-            static_buf,
-            &self.page_type(),
-            cell_pointer,
-            payload_overflow_threshold_max,
-            payload_overflow_threshold_min,
-            usable_size,
-        )
+        read_btree_cell(static_buf, self, cell_pointer, usable_size)
     }
 
     /// Read the rowid of a table interior cell.
@@ -629,13 +617,7 @@ impl PageContent {
     }
 
     /// Get region(start end length) of a cell's payload
-    pub fn cell_get_raw_region(
-        &self,
-        idx: usize,
-        payload_overflow_threshold_max: usize,
-        payload_overflow_threshold_min: usize,
-        usable_size: usize,
-    ) -> (usize, usize) {
+    pub fn cell_get_raw_region(&self, idx: usize, usable_size: usize) -> (usize, usize) {
         let buf = self.as_ptr();
         let ncells = self.cell_count();
         let (cell_pointer_array_start, _) = self.cell_pointer_array_offset_and_size();
@@ -643,6 +625,10 @@ impl PageContent {
         let cell_pointer = cell_pointer_array_start + (idx * CELL_POINTER_SIZE_BYTES);
         let cell_pointer = self.read_u16_no_offset(cell_pointer) as usize;
         let start = cell_pointer;
+        let payload_overflow_threshold_max =
+            payload_overflow_threshold_max(self.page_type(), usable_size as u16);
+        let payload_overflow_threshold_min =
+            payload_overflow_threshold_min(self.page_type(), usable_size as u16);
         let len = match self.page_type() {
             PageType::IndexInterior => {
                 let (len_payload, n_payload) = read_varint(&buf[cell_pointer + 4..]).unwrap();
@@ -890,12 +876,13 @@ pub struct IndexLeafCell {
 /// buffer input "page" is static because we want the cell to point to the data in the page in case it has any payload.
 pub fn read_btree_cell(
     page: &'static [u8],
-    page_type: &PageType,
+    page_content: &PageContent,
     pos: usize,
-    max_local: usize,
-    min_local: usize,
     usable_size: usize,
 ) -> Result<BTreeCell> {
+    let page_type = page_content.page_type();
+    let max_local = payload_overflow_threshold_max(page_type, usable_size as u16);
+    let min_local = payload_overflow_threshold_min(page_type, usable_size as u16);
     match page_type {
         PageType::IndexInterior => {
             let mut pos = pos;
@@ -1358,6 +1345,7 @@ pub fn read_entire_wal_dumb(file: &Arc<dyn File>) -> Result<Arc<UnsafeCell<WalFi
             u32::from_be_bytes([buf_slice[24], buf_slice[25], buf_slice[26], buf_slice[27]]);
         header_locked.checksum_2 =
             u32::from_be_bytes([buf_slice[28], buf_slice[29], buf_slice[30], buf_slice[31]]);
+        tracing::debug!("read_entire_wal_dumb(header={:?})", *header_locked);
 
         // Read frames into frame_cache and pages_in_frames
         if buf_slice.len() < WAL_HEADER_SIZE {
@@ -1440,6 +1428,13 @@ pub fn read_entire_wal_dumb(file: &Arc<dyn File>) -> Result<Arc<UnsafeCell<WalFi
                 use_native_endian_checksum,
             );
 
+            tracing::debug!(
+                "read_entire_wal_dumb(frame_h_checksum=({}, {}), calculated_frame_checksum=({}, {}))",
+                frame_h_checksum_1,
+                frame_h_checksum_2,
+                calculated_frame_checksum.0,
+                calculated_frame_checksum.1
+            );
             if calculated_frame_checksum != (frame_h_checksum_1, frame_h_checksum_2) {
                 panic!(
                     "WAL frame checksum mismatch. Expected ({}, {}), Got ({}, {})",
@@ -1466,13 +1461,13 @@ pub fn read_entire_wal_dumb(file: &Arc<dyn File>) -> Result<Arc<UnsafeCell<WalFi
             let is_commit_record = frame_h_db_size > 0;
             if is_commit_record {
                 wfs_data.max_frame.store(frame_idx, Ordering::SeqCst);
-                wfs_data.last_checksum = cumulative_checksum;
             }
 
             frame_idx += 1;
             current_offset += WAL_FRAME_HEADER_SIZE + page_size;
         }
 
+        wfs_data.last_checksum = cumulative_checksum;
         wfs_data.loaded.store(true, Ordering::SeqCst);
     });
     let c = Completion::new(CompletionType::Read(ReadCompletion::new(
@@ -1562,6 +1557,11 @@ pub fn begin_write_wal_frame(
         );
         header.checksum_1 = final_checksum.0;
         header.checksum_2 = final_checksum.1;
+        tracing::trace!(
+            "begin_write_wal_frame(checksum=({}, {}))",
+            header.checksum_1,
+            header.checksum_2
+        );
 
         buf[16..20].copy_from_slice(&header.checksum_1.to_be_bytes());
         buf[20..24].copy_from_slice(&header.checksum_2.to_be_bytes());
@@ -1598,6 +1598,7 @@ pub fn begin_write_wal_frame(
 }
 
 pub fn begin_write_wal_header(io: &Arc<dyn File>, header: &WalHeader) -> Result<()> {
+    tracing::trace!("begin_write_wal_header");
     let buffer = {
         let drop_fn = Rc::new(|_buf| {});
 
